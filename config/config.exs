@@ -39,6 +39,19 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+config :task_pipeline, Oban,
+  engine: Oban.Engines.Basic,
+  repo: TaskPipeline.Repo,
+  queues: [
+    # Set the default task queue concurrency limit to 10
+    tasks: [limit: 10]
+  ],
+  plugins: [
+    # Configure automatic pruning to prevent the oban_jobs table from bloating the database under a 10k/min throughput
+    # Retain 24 hours of history
+    {Oban.Plugins.Pruner, max_age: 3600 * 24}
+  ]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

@@ -9,6 +9,13 @@ defmodule TaskPipelineWeb.Router do
     pipe_through :api
   end
 
+  scope "/", TaskPipelineWeb do
+    pipe_through :api
+
+    # Add this line to handle GET /
+    get "/", PageController, :index
+  end
+
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:task_pipeline, :dev_routes) do
     # If you want to use the LiveDashboard in production, you should put

@@ -12,8 +12,12 @@ defmodule TaskPipeline.Application do
       TaskPipeline.Repo,
       {DNSCluster, query: Application.get_env(:task_pipeline, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: TaskPipeline.PubSub},
-      # Start a worker by calling: TaskPipeline.Worker.start_link(arg)
-      # {TaskPipeline.Worker, arg},
+
+      # Oban must be supervised after Repo starts and before Endpoint starts.
+      # This ensures the database connection pool is ready when Oban boots,
+      # and background workers are ready to consume tasks before exposing the API endpoints.
+      {Oban, Application.fetch_env!(:task_pipeline, Oban)},
+
       # Start to serve requests, typically the last entry
       TaskPipelineWeb.Endpoint
     ]
