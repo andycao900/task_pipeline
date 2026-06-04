@@ -1,7 +1,7 @@
 defmodule TaskPipeline.Tasks.Task do
   @moduledoc """
   Defines the core Schema, type definitions, and state machine constraints
-  for background operational tasks.
+  for background operational tasks. Integrates optimistic locking for concurrency control.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -29,6 +29,7 @@ defmodule TaskPipeline.Tasks.Task do
           max_attempts: integer(),
           status: status(),
           attempts: [attempt_log()],
+          lock_version: integer(),
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -46,13 +47,14 @@ defmodule TaskPipeline.Tasks.Task do
     # Embedded list of maps tracking history of job runs
     field :attempts, {:array, :map}, default: []
 
+    # Tracks database-tier row versions to prevent race conditions natively
+    field :lock_version, :integer, default: 1
+
     timestamps()
   end
 
   @doc """
   Generates an execution changeset for validating incoming payload ingestion.
-
-  Ensures all mandatory fields are present and data formats adhere to structural constraints.
   """
   @spec changeset(t() | Ecto.Schema.t(), map()) :: Ecto.Changeset.t()
   def changeset(task, attrs) do
@@ -64,9 +66,6 @@ defmodule TaskPipeline.Tasks.Task do
 
   @doc """
   Executes deterministic state transitions enforced by the system lifecycle state machine.
-
-  Guards against race conditions, out-of-order execution, and invalid state jumps.
-  Optionally appends an absolute telemetry attempt log payload to the historical log.
   """
   @spec status_changeset(t(), status(), attempt_log() | nil) :: Ecto.Changeset.t()
   def status_changeset(task, new_status, additional_attempt \\ nil) do
@@ -78,20 +77,20 @@ defmodule TaskPipeline.Tasks.Task do
           do: task.attempts ++ [additional_attempt],
           else: task.attempts
 
+      # Optimized via Ecto: optimistic_lock/1 intercepts this struct during Repo operations
       change(task, %{status: new_status, attempts: attempts})
+      |> optimistic_lock(:lock_version)
     else
       change(task)
       |> add_error(:status, "Invalid status transition from #{current_status} to #{new_status}")
     end
   end
 
-  # State machine guard rails
+  # State machine guard rail
   @spec valid_transition?(status(), status()) :: boolean()
   defp valid_transition?(:queued, :processing), do: true
   defp valid_transition?(:processing, :completed), do: true
-  # Re-queued for retry
   defp valid_transition?(:processing, :queued), do: true
-  # Max attempts exhausted
   defp valid_transition?(:processing, :failed), do: true
   defp valid_transition?(_from, _to), do: false
 end
