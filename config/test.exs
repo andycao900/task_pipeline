@@ -35,3 +35,12 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+config :task_pipeline, Oban,
+  repo: TaskPipeline.Repo,
+  # 开启手动测试模式（这会自动禁用后台实际的队列消费和 Peer 轮询）
+  testing: :manual,
+  # 在测试中完全禁用后台插件（例如 Pruner），避免它们在测试期间无序访问数据库
+  plugins: false,
+  # 禁用 Peer 选举
+  peer: false
