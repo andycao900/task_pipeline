@@ -8,16 +8,21 @@ A high-concurrency asynchronous task processing pipeline built with Elixir, Phoe
 
 The core system architecture is engineered for predictable latency, strict lifecycle tracking, and failure resilience under high throughput.
 
-              +-----------------------------------+
-              |   TaskPipeline.Application        |
-              +-----------------------------------+
-                                |
-     +--------------------------+--------------------------+
-     |                          |                          |
-+------------------+        +-----------------+        +-----------------+
-| TaskPipeline.Repo|------->|     Oban        |------->|TaskPipelineWeb. |
-+------------------+        +-----------------+        |    Endpoint     |
-(Connection Pool)           (Queue Processing)         +-----------------+
+```mermaid
+graph TD
+    App[TaskPipeline.Application]
+    Repo[TaskPipeline.Repo <br/> Connection Pool]
+    Oban[Oban <br/> Queue Processing]
+    Endpoint[TaskPipelineWeb.Endpoint <br/> HTTP Server]
+
+    App --> Repo
+    Repo --> Oban
+    Oban --> Endpoint
+
+    style App fill:#f9f,stroke:#333,stroke-width:2px
+    style Repo fill:#bbf,stroke:#333,stroke-width:1px
+    style Oban fill:#bbf,stroke:#333,stroke-width:1px
+    style Endpoint fill:#bbf,stroke:#333,stroke-width:1px
 
 ### Key Architectural Decisions
 
