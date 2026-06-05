@@ -36,6 +36,16 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix,
   sort_verified_routes_query_params: true
 
+# Compress simulation processing latencies to 0ms to eliminate un-testable idle wait states
+config :task_pipeline, :priority_durations,
+  critical: [base: 0, rand: 1],
+  high: [base: 0, rand: 1],
+  normal: [base: 0, rand: 1],
+  low: [base: 0, rand: 1]
+
+# Set a predictable fault gate for random fallbacks if no precise mock is injected
+config :task_pipeline, :task_failure_threshold, 20
+
 config :task_pipeline, Oban,
   repo: TaskPipeline.Repo,
   # Enable manual testing mode (this automatically disables real background queue consumption and peer polling)

@@ -103,7 +103,13 @@ defmodule TaskPipeline.TasksTest do
       assert {:ok, %{task: _}} = Tasks.create_task(@valid_payload)
 
       summary = Tasks.get_tasks_summary()
-      assert summary == %{"queued" => 2}
+
+      assert summary == %{
+               "queued" => 2,
+               "processing" => 0,
+               "completed" => 0,
+               "failed" => 0
+             }
     end
   end
 end

@@ -39,18 +39,34 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+import Config
+
+# --- Task Pipeline Core Engine Configuration ---
+
+# Default random fault threshold (20% chance to trigger business logic failure simulation)
+config :task_pipeline, :task_failure_threshold, 20
+
+# Standard Production & Development Jitter Delay Profiles (in milliseconds)
+# Formulates the traffic staggering matrices across concurrent workers
+config :task_pipeline, :priority_durations,
+  # 1-2 Seconds
+  critical: [base: 1000, rand: 1001],
+  # 2-4 Seconds
+  high: [base: 2000, rand: 2001],
+  # 4-6 Seconds
+  normal: [base: 4000, rand: 2001],
+  # 6-8 Seconds
+  low: [base: 6000, rand: 2001]
+
+# Standard Oban Open-Source Engine Core Layout
 config :task_pipeline, Oban,
   engine: Oban.Engines.Basic,
   repo: TaskPipeline.Repo,
-  queues: [
-    # Set the default task queue concurrency limit to 10
-    tasks: [limit: 10]
-  ],
-  plugins: [
-    # Configure automatic pruning to prevent the oban_jobs table from bloating the database under a 10k/min throughput
-    # Retain 24 hours of history
-    {Oban.Plugins.Pruner, max_age: 3600 * 24}
-  ]
+  # Configure automatic pruning to prevent the oban_jobs table from bloating the database under a 10k/min throughput
+  # Retain 24 hours of history
+  plugins: [{Oban.Plugins.Pruner, max_age: 3600 * 24}],
+  # Allows up to 50 concurrent operational execution threads per node
+  queues: [tasks: 50]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

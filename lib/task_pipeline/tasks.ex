@@ -84,9 +84,22 @@ defmodule TaskPipeline.Tasks do
   """
   @spec get_tasks_summary() :: map()
   def get_tasks_summary do
-    from(t in Task, group_by: t.status, select: {t.status, count(t.id)})
-    |> Repo.all()
-    |> Map.new(fn {status, count} -> {to_string(status), count} end)
+    # 1. Define the mandatory full-lifecycle zero-filled baseline contract
+    default_matrix = %{
+      "queued" => 0,
+      "processing" => 0,
+      "completed" => 0,
+      "failed" => 0
+    }
+
+    # 2. Execute optimized group_by aggregation via single index sequential scan
+    active_counts =
+      from(t in Task, group_by: t.status, select: {t.status, count(t.id)})
+      |> Repo.all()
+      |> Map.new(fn {status, count} -> {to_string(status), count} end)
+
+    # 3. Atomically merge to secure full schema compliance back to the presentation tier
+    Map.merge(default_matrix, active_counts)
   end
 
   # --- Composable Internal Scopes ---

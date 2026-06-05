@@ -11,7 +11,6 @@ defmodule TaskPipelineWeb.TaskController do
   """
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, params) do
-    # 💡 STAFF ARCHITECTURAL CONSIDERATION (Cursor-based Pagination Blueprint):
     # TODO: To sustainably fulfill the 10,000 tasks/min concurrent SLA requirements,
     # traditional `OFFSET / LIMIT` pagination MUST BE REJECTED.
     # As the database row volume grows into millions, OFFSET forces PostgreSQL to perform
@@ -33,12 +32,26 @@ defmodule TaskPipelineWeb.TaskController do
   """
   @spec show(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show(conn, %{"id" => id}) do
-    case Tasks.get_task(id) do
-      nil ->
-        {:error, :not_found}
+    # Forward guard check to filter out non-UUID garbage injections before database ingestion
+    case Ecto.UUID.cast(id) do
+      {:ok, valid_uuid} ->
+        case Tasks.get_task(valid_uuid) do
+          nil ->
+            conn
+            |> put_status(:not_found)
+            |> put_view(html: TaskPipelineWeb.ErrorHTML, json: TaskPipelineWeb.ErrorJSON)
+            |> render(:"404")
 
-      %Task{} = task ->
-        render(conn, :show, task: task)
+          %Task{} = task ->
+            render(conn, :show, task: task)
+        end
+
+      :error ->
+        # Smoothly reject invalid malformed strings with a clean 404/400 without crashing the node
+        conn
+        |> put_status(:not_found)
+        |> put_view(html: TaskPipelineWeb.ErrorHTML, json: TaskPipelineWeb.ErrorJSON)
+        |> render(:"404")
     end
   end
 
