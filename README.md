@@ -35,3 +35,29 @@ Ensure your local language runtime matches the project specifications:
 asdf plugin add erlang
 asdf plugin add elixir
 asdf install
+
+## Local Development Setup & Provisioning
+
+Follow these steps sequentially to configure your local runtime environment, install locked compiler dependencies, and initialize the PostgreSQL relational tables.
+
+### 1. Dependency Management & Database Initialization
+Fetch and compile external Elixir packages, configure your local PostgreSQL credentials, and run migrations along with core system seed records.
+
+Before initializing, ensure your target PostgreSQL instance is running and its access permissions align with your environment variables (configured inside `config/dev.exs` and `config/test.exs`).
+
+```bash
+# Fetch and compile mix dependencies locked in mix.lock
+mix deps.get
+
+# Compile dependencies and your core application
+mix deps.compile
+
+# Automated script to create databases, run Ecto migrations, and load relational mock seed states
+# this step populates your datastore using the module located at priv/repo/seeds.exs
+mix setup
+
+#testing
+mix test 
+or postman with endpoint url
+http://localhost:4000/api/tasks/
+http://localhost:4000/api/tasks/summary
