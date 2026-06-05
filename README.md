@@ -8,28 +8,27 @@ A high-concurrency asynchronous task processing pipeline built with Elixir, Phoe
 
 The core system architecture is engineered for predictable latency, strict lifecycle tracking, and failure resilience under high throughput.
 
-### OTP Supervision Hierarchy
-```text
-TaskPipeline.Application
-  │
-  ├── TaskPipeline.Repo (Database Connection Pool)
-  │
-  ├── Oban (Background Queue Processing Engine)
-  │
-  └── TaskPipelineWeb.Endpoint (Bandit HTTP Server)
-
 ### Key Architectural Decisions
 
-1. **Supervision Tree Orchestration**: `Oban` is strictly supervised *after* `TaskPipeline.Repo` and *before* `TaskPipelineWeb.Endpoint`. This guarantees the PostgreSQL connection pool is fully warmed up before Oban boots, and ensures background workers are ready to consume workloads before the HTTP server begins routing live traffic.
-2. **Transactional Enqueueing**: Task record persistence and Oban job insertions are wrapped within an `Ecto.Multi` transaction. This enforces strict atomicity—preventing phantom jobs and ensuring data consistency.
-3. **Database Bloat Mitigation**: To sustainably handle heavy traffic profiles (e.g., 10k tasks/min), `Oban.Plugins.Pruner` is configured to automatically purge historical jobs after 24 hours. This eliminates table bloat and prevents database index degradation under persistent write amplification.
-4. **Database Indexing & Query Optimization**: 
+1. **Transactional Dual-Write Engine**: Task ingestion couples domain record generation with background scheduling using an isolated `Ecto.Multi` block. This prevents orphaned processing records and guarantees transactional parity across business states and Oban execution queues.
+2. **Concurrency Shield via Optimistic Locking**: To handle high-volume row modifications across horizontal nodes without locking database rows (`SELECT FOR UPDATE`), the `tasks` schema uses an atomic `lock_version` mechanism. Concurrent stale write attempts during state machine mutations are deflected safely at the database layer, preventing data corruption.
+3. **Advanced Priority Scheduling & Traffic Staggering**: The pipeline utilizes a dual-tier mechanism to process high-priority tasks first without causing queue starvation or consumer locks:
+   * **Oban Priority Weights**: Maps domain priorities directly to Oban numerical weights (`critical` -> `3`, `low` -> `0`). Oban's poll engine reads these values to order jobs natively via database index scans (`ORDER BY priority DESC`).
+   * **Staggered Queue Ingestion (`scheduled_at`)**: To protect infrastructure from spikes under a $10,000 \text{ tasks/min}$ throughput, low and normal tasks are automatically injected with an engineered scheduling offset (`+5s` for normal, `+30s` for low). Critical paths completely bypass this delay, ensuring immediate execution.
+4. **Idempotent Job Processing**: Workers execute a non-blocking pre-flight state validation guard asserting that the processing task is strictly in a `:queued` state before firing any code. This guarantees execution idempotency if a worker drops or redelivers a job signature under load.
+5. **Denormalized Telemetry Array**: Execution step details and retry histories are stored within an embedded JSONB `attempts` column. This structural pattern avoids cross-table write bottlenecks during high-concurrency loops and keeps historical audit logs localized to a single row read ($O(1)$).
+6. **Database Bloat Mitigation**: To sustainably handle heavy traffic profiles (e.g., 10k tasks/min), `Oban.Plugins.Pruner` is configured to automatically purge historical jobs after 24 hours. This eliminates table bloat and prevents database index degradation under persistent write amplification.
+7. **Database Indexing & Query Optimization**: 
    * **Native PG Enums**: Enforced at the database tier to minimize storage consumption and guarantee structural validity.
    * **Composite Index**: Tailored directly for the `GET /api/tasks` endpoint requirements, sorting high-priority and newer tasks first.
    * **Partial Indexing**: Under a 10k/min scale, finished tasks dominate storage. We isolate hot-reads by maintaining a dedicated index `WHERE status IN ('queued', 'processing')`, securing sub-millisecond query execution.
 
 ---
+### Future Scalability Considerations
 
+* **Batch Ingestion vs. Atomic Processing**: While batch database insertions (`Repo.insert_all`) are highly effective at the ingestion layer (`POST /api/tasks`) to minimize network round-trips during bulk task creation, they are explicitly avoided within the background processing execution layer (`Oban.Worker`). Processing tasks individually preserves strict blast-radius isolation (preventing a single task failure from rolling back an entire batch) and maintains the integrity of the atomic `lock_version` state-machine guards.
+
+---
 ## System Prerequisites
 
 This project enforces strict version targeting. Ensure you have `asdf` or a compatible version manager installed to read the `.tool-versions` file.

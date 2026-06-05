@@ -61,7 +61,7 @@ defmodule TaskPipeline.Tasks.TaskTest do
       assert changeset.filters[:lock_version] == 1
     end
 
-    test "success: allows valid terminal jumps from processing", %{task: task} do
+    test "success: allows valid terminal jumps from processing", %{task: %Task{} = task} do
       # Simulate a task currently processing
       processing_task = %Task{task | status: :processing}
 

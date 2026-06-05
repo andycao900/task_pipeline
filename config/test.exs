@@ -38,9 +38,9 @@ config :phoenix,
 
 config :task_pipeline, Oban,
   repo: TaskPipeline.Repo,
-  # 开启手动测试模式（这会自动禁用后台实际的队列消费和 Peer 轮询）
+  # Enable manual testing mode (this automatically disables real background queue consumption and peer polling)
   testing: :manual,
-  # 在测试中完全禁用后台插件（例如 Pruner），避免它们在测试期间无序访问数据库
+  # Completely disable background plugins (e.g., Pruner) during testing to prevent unpredictable concurrent database access
   plugins: false,
-  # 禁用 Peer 选举
+  # Disable distributed cluster peer election within the test environment
   peer: false
