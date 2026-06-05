@@ -1,10 +1,34 @@
 defmodule TaskPipeline.Workers.TaskProcessor do
   @moduledoc """
-  High-throughput Oban execution worker. Features defensive lifecycle error handling,
-  priority latency simulations driven by environment configurations, deterministic
-  test hooks for fault-tolerance verification, and randomized exponential backoff retry jitter.
+  High-throughput Oban execution worker featuring a tri-tier idempotency shield,
+  domain-driven fault taxonomy classification, and real-time telemetry metrics aggregation.
 
-  ## Status Lifecycle Diagram
+  ## Supervision & Fault Tolerance Topology
+
+  To enforce strict production availability SLAs under a 10,000 tasks/min throughput background,
+  this module operates alongside a dedicated diagnostic sub-supervision tree:
+
+      [TaskPipeline.Supervisor] (Strategy: :one_for_one)
+                 │
+                 ├── [TaskPipeline.Monitoring.Supervisor] (Strategy: :one_for_one)
+                 │         │
+                 │         └── [TaskPipeline.Monitoring.MetricsTracker] (GenServer)
+                 │
+                 └── [Oban] (Background Job Engine)
+
+  ### Telemetry Isolation and State Recovery
+  1. **Blast Radius Control**: All runtime tracking states are sequestered inside the `MetricsTracker`
+     GenServer, which sits under the isolated `Monitoring.Supervisor`. If a severe mailbox overflow
+     or telemetry anomaly crashes the tracker, its fault boundary is completely contained.
+  2. **Non-Blocking Telemetry Ingestion**: Workers update performance metrics asynchronously via
+     one-way `GenServer.cast/2` signals (`log_success` and `log_failure`). This ensures that diagnostic
+     crashes or latency spikes never throttle or cascade into active core database transactions.
+  3. **In-Flight Task Recovery (OOM/Crash Mitigation)**: If a worker node encounters a sudden
+     hardware OOM or connection severance mid-execution, Oban's localized heartbeat timeout leases
+     will expire. The job is automatically re-queued. Upon picking up the duplicate token, the subsequent
+     consumer thread relies on the relational `lock_version` to safely deflect out-of-order writes.
+
+  ## Status Lifecycle Strategy
   queued → processing → completed
   ↓
   (on failure)
@@ -20,7 +44,7 @@ defmodule TaskPipeline.Workers.TaskProcessor do
     unique: [
       period: 60,
       fields: [:args, :queue],
-      states: [:available, :scheduled, :executing, :retryable]
+      states: :incomplete
     ]
 
   require Logger
@@ -34,6 +58,9 @@ defmodule TaskPipeline.Workers.TaskProcessor do
   @impl Oban.Worker
   @spec perform(Oban.Job.t()) :: :ok | {:error, any()}
   def perform(%Oban.Job{args: %{"task_id" => task_id}} = job) do
+    # Capture monotonic clock at the absolute threshold entry point to track genuine latency pipelines
+    start_time = System.monotonic_time(:millisecond)
+
     case Tasks.get_task(task_id) do
       nil ->
         # Task record is fundamentally missing from the database.
@@ -53,7 +80,7 @@ defmodule TaskPipeline.Workers.TaskProcessor do
 
           :ok
         else
-          execute_pipeline(task, job)
+          execute_pipeline(task, job, start_time)
         end
     end
   end
@@ -69,20 +96,20 @@ defmodule TaskPipeline.Workers.TaskProcessor do
   @impl Oban.Worker
   @spec backoff(Oban.Job.t()) :: integer()
   def backoff(%Oban.Job{attempt: attempt}) do
-    # 1. Base exponential growth factor: 1st retry = 1s, 2nd = 16s, 3rd = 81s...
+    # Base exponential growth factor: 1st retry = 1s, 2nd = 16s, 3rd = 81s...
     exponential_base = :math.pow(attempt, 4) |> trunc()
 
-    # 2. Inject a randomized jitter up to 30 seconds to break synchronicity across workers
+    # Inject a randomized jitter up to 30 seconds to break synchronicity across workers
     jitter = :rand.uniform(30)
 
-    # 3. Secure a structural minimum padding of 2 seconds
+    # Secure a structural minimum padding of 2 seconds
     exponential_base + 2 + jitter
   end
 
   # --- Internal Pipeline Segments ---
 
-  @spec execute_pipeline(Task.t(), Oban.Job.t()) :: :ok | {:error, String.t()}
-  defp execute_pipeline(%Task{} = task, %Oban.Job{} = job) do
+  @spec execute_pipeline(Task.t(), Oban.Job.t(), integer()) :: :ok | {:error, String.t()}
+  defp execute_pipeline(%Task{} = task, %Oban.Job{} = job, start_time) do
     Logger.debug("Transitioning task to processing. task_id=#{task.id}")
 
     case Tasks.update_task_status(
@@ -96,7 +123,7 @@ defmodule TaskPipeline.Workers.TaskProcessor do
         # Evaluate execution logic and route through explicit semantic error matchers
         case run_business_logic(processing_task) do
           :ok ->
-            finalize_success(processing_task)
+            finalize_success(processing_task, start_time)
 
           # Transient Errors (Rate limiting / Network hiccups) -> Safe to retry
           {:error, :rate_limited} ->
@@ -106,6 +133,7 @@ defmodule TaskPipeline.Workers.TaskProcessor do
               job
             )
 
+          # Transient Errors (Timeouts) -> Safe to retry
           {:error, :timeout} ->
             handle_transient_failure(
               processing_task,
@@ -120,6 +148,7 @@ defmodule TaskPipeline.Workers.TaskProcessor do
               "HTTP 400 Bad Request - Schema mutation violates static constraints"
             )
 
+          # Fatal Errors (Payload Overflow) -> Do NOT retry
           {:error, :payload_too_large} ->
             handle_fatal_failure(
               processing_task,
@@ -147,6 +176,9 @@ defmodule TaskPipeline.Workers.TaskProcessor do
       Logger.error(
         "Transient error exhausted max retry limits. Moving to terminal failed state. task_id=#{task.id} reason=#{reason}"
       )
+
+      # Asynchronously increment systemic failure counters upon hitting unrecoverable processing boundaries
+      TaskPipeline.Monitoring.MetricsTracker.log_failure()
 
       {:ok, _} =
         Tasks.update_task_status(
@@ -182,6 +214,9 @@ defmodule TaskPipeline.Workers.TaskProcessor do
       "Fatal business error encountered. Terminating execution immediately. task_id=#{task.id} reason=#{reason}"
     )
 
+    # Asynchronously increment systemic failure counters upon hitting unrecoverable processing boundaries
+    TaskPipeline.Monitoring.MetricsTracker.log_failure()
+
     {:ok, _} =
       Tasks.update_task_status(
         task,
@@ -193,9 +228,15 @@ defmodule TaskPipeline.Workers.TaskProcessor do
     :ok
   end
 
-  @spec finalize_success(Task.t()) :: :ok
-  defp finalize_success(%Task{} = task) do
+  @spec finalize_success(Task.t(), integer()) :: :ok
+  defp finalize_success(%Task{} = task, start_time) do
     Logger.debug("Task executed successfully. task_id=#{task.id}")
+
+    # Calculate execution latency using monotonic time to guard against system clock adjustments
+    duration_ms = System.monotonic_time(:millisecond) - start_time
+
+    # Asynchronously dispatch metrics tracking to keep the core execution thread non-blocking
+    TaskPipeline.Monitoring.MetricsTracker.log_success(duration_ms)
 
     {:ok, _} =
       Tasks.update_task_status(

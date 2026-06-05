@@ -17,7 +17,7 @@ defmodule TaskPipeline.Application do
       # This ensures the database connection pool is ready when Oban boots,
       # and background workers are ready to consume tasks before exposing the API endpoints.
       {Oban, Application.fetch_env!(:task_pipeline, Oban)},
-
+      {TaskPipeline.Monitoring.Supervisor, []},
       # Start to serve requests, typically the last entry
       TaskPipelineWeb.Endpoint
     ]
