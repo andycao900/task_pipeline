@@ -7,6 +7,12 @@ defmodule TaskPipelineWeb.Router do
 
   scope "/api", TaskPipelineWeb do
     pipe_through :api
+
+    # Place the specific 'summary' aggregate path BEFORE the
+    # dynamic :id capture router to prevent PostgreSQL parameter parsing hijacking.
+    get "/tasks/summary", TaskController, :summary
+
+    resources "/tasks", TaskController, only: [:index, :show, :create]
   end
 
   scope "/", TaskPipelineWeb do

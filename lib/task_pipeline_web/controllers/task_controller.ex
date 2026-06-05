@@ -1,0 +1,70 @@
+defmodule TaskPipelineWeb.TaskController do
+  use TaskPipelineWeb, :controller
+
+  alias TaskPipeline.Tasks
+  alias TaskPipeline.Tasks.Task
+
+  action_fallback TaskPipelineWeb.FallbackController
+
+  @doc """
+  Lists tasks using composable internal query maps with filtering.
+  """
+  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def index(conn, params) do
+    # 💡 STAFF ARCHITECTURAL CONSIDERATION (Cursor-based Pagination Blueprint):
+    # TODO: To sustainably fulfill the 10,000 tasks/min concurrent SLA requirements,
+    # traditional `OFFSET / LIMIT` pagination MUST BE REJECTED.
+    # As the database row volume grows into millions, OFFSET forces PostgreSQL to perform
+    # a linear sequential scan (O(N) cost) discarding N rows prior to returning results.
+    #
+    # Mitigation Implementation Strategy:
+    # 1. We will extract a deterministic pagination cursor (e.g., `params["after_id"]` and `params["after_timestamp"]`).
+    # 2. Slice the query utilizing an explicit range condition against our composite index:
+    #    `where(query, [t], t.inserted_at < ^cursor_timestamp or (t.inserted_at == ^cursor_timestamp and t.id < ^cursor_id))`
+    # 3. This locks the database query execution planner into an O(log N) constant index-seek timeline,
+    #    neutralizing persistent response degradation regardless of relational pool depths.
+
+    tasks = Tasks.list_tasks(params)
+    render(conn, :index, tasks: tasks)
+  end
+
+  @doc """
+  Retrieves a discrete task structural instance by its binary ID signature.
+  """
+  @spec show(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def show(conn, %{"id" => id}) do
+    case Tasks.get_task(id) do
+      nil ->
+        {:error, :not_found}
+
+      %Task{} = task ->
+        render(conn, :show, task: task)
+    end
+  end
+
+  @doc """
+  Aggregates status statistics broken down by state machine parameters.
+  """
+  @spec summary(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def summary(conn, _params) do
+    summary = Tasks.get_tasks_summary()
+    render(conn, :summary, summary: summary)
+  end
+
+  @doc """
+  Ingests raw task payloads, orchestrating transactional dual-system enqueueing operations.
+  """
+  @spec create(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def create(conn, task_params) do
+    case Tasks.create_task(task_params) do
+      {:ok, %{task: %Task{} = task}} ->
+        conn
+        |> put_status(:created)
+        |> render(:show, task: task)
+
+      {:error, :task, %Ecto.Changeset{} = changeset, _steps} ->
+        # Hijack validation anomalies and pipe them smoothly down into the error presentation filter
+        {:error, changeset}
+    end
+  end
+end
