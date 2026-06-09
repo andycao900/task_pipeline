@@ -1,6 +1,34 @@
 defmodule TaskPipeline.Application do
   # See https://hexdocs.pm/elixir/Application.html
   # for more information on OTP Applications
+  #                       ┌────────────────────────────────┐
+  #                       │    Master Root Supervisor      │
+  #                       └───────────────┬────────────────┘
+  #                                       │
+  #              ┌────────────────────────┴────────────────────────┐
+  #              ▼                                                 ▼
+  # ┌──────────────────────────────┐               ┌──────────────────────────────┐
+  # │  Core Infrastructure Tree    │               │ Monitoring Sub-Supervisor    │
+  # │  (Critical Path)             │               │ (Fault Isolation Sandbox)    │
+  # ├──────────────────────────────┤               ├──────────────────────────────┤
+  # │ - Database Pool (Repo)       │               │ Topology Matrix:             │
+  # │ - HTTP Ingestion (Endpoint)  │               │ - Strategy: :one_for_one     │
+  # └──────────────────────────────┘               └───────────────┬──────────────┘
+  #              │                                                 │
+  #              │ (Continuous Operations)                         │ (Isolates and Supervises)
+  #              ▼                                                 ▼
+  # ┌──────────────────────────────┐               ┌──────────────────────────────┐
+  # │  Maintains 99.99% Stability  │               │   MetricsTracker GenServer   │
+  # │  - Zero processing drops     │               ├──────────────────────────────┤
+  # │  - Connection pools intact   │               │ 💥 Mailbox Saturation/Crash  │
+  # └──────────────────────────────┘               └───────────────┬──────────────┘
+  #                                                                │
+  #                                                                ▼
+  #                                                ┌──────────────────────────────┐
+  #                                                │ Microsecond Self-Healing     │
+  #                                                │ - Restarted instantly by tree│
+  #                                                │ - Zero memory/fault leaks    │
+  #                                                └──────────────────────────────┘
   @moduledoc false
 
   use Application

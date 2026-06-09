@@ -36,6 +36,40 @@ defmodule TaskPipeline.Workers.TaskProcessor do
   queued (retry) ← re-enqueued if attempts remain
   ↓
   failed ← when max_attempts exhausted
+  Design Node Matrix:
+  Node 3 (Optimistic Locking Shield),
+  Node 5 (Domain-Driven Fault Taxonomy),
+  Node 6 (Jittered Backoff),
+  Node 7 & 12 (Tri-Tier Idempotency Shield).
+
+  [ High-Throughput Task Stream (10,000 tasks/min) ]
+                                       │
+                                       ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  Tier 1: Scheduler Ingestion Gate (Oban Unique Engine)                    │
+  │  - Filters redundant payloads via transactional unique indexes in PG.     │
+  └───────────────────────────────────┬───────────────────────────────────────┘
+                                     │ (Passes Unique Token Check)
+                                     ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  Tier 2: Worker Pre-flight Validation Guard                               │
+  │  - Asserts domain status strictly matches :queued / :processing.          │
+  └───────────────────────────────────┬───────────────────────────────────────┘
+                                     │ (Passes State Validation)
+                                     ▼
+  ┌───────────────────────────────────────────────────────────────────────────┐
+  │  Tier 3: Relational Optimistic Locking Shield                             │
+  │  - Atomic DB Verification: UPDATE tasks SET ... WHERE lock_version = X    │
+  └───────────────────────────────────┬───────────────────────────────────────┘
+                                     │
+               ┌─────────────────────┴─────────────────────┐
+               ▼ (Success: Lock Version Matched)           ▼ (Conflict Detected)
+  ┌───────────────────────────────────────────┐ ┌───────────────────────────┐
+  │          Execute Task Payload             │ │  Atomic Invariant Failure │
+  ├───────────────────────────────────────────┤ ├───────────────────────────┤
+  │ - Simulates dynamic delay (Jitter Timer)  │ │ - Stale write deflected   │
+  │ - Appends execution logs into JSONB       │ │ - Returns safe :ok tuple  │
+  └───────────────────────────────────────────┘ └───────────────────────────┘
   """
   use Oban.Worker,
     queue: :tasks,

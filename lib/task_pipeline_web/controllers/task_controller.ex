@@ -1,4 +1,22 @@
 defmodule TaskPipelineWeb.TaskController do
+  @moduledoc """
+  [ Client Request ] -> [ Phoenix Ingestion Controller ]
+                  │
+                  ▼
+  ┌──────────────────────────────┐
+  │    Ecto.Multi Transaction    │
+  │                              │
+  │  Step 1: Write Domain Task   │
+  │  Step 2: Inject Oban Job     │
+  └──────────────┬───────────────┘
+                 │ (Guarantees Dual-Write Parity)
+                 ▼
+  ┌──────────────────────────────┐
+  │     PostgreSQL Database      │
+  │  - tasks: [status]=:queued   │
+  │  - oban_jobs: available      │
+  └──────────────────────────────┘
+  """
   use TaskPipelineWeb, :controller
 
   alias TaskPipeline.Tasks
